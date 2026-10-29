@@ -1,0 +1,108 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-canvas text-ink antialiased;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'ss01';
+    min-height: 100vh;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    @apply text-ink;
+    letter-spacing: -0.015em;
+  }
+
+  /* Numeric columns align vertically. */
+  .tnum {
+    font-variant-numeric: tabular-nums lining-nums;
+  }
+
+  :focus-visible {
+    outline: 2px solid #15803d;
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background: #dcfce7;
+    color: #14532d;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-2xl border border-line bg-white shadow-card;
+  }
+
+  .panel-title {
+    @apply text-base font-semibold text-ink;
+  }
+
+  .field-label {
+    @apply mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted;
+  }
+
+  .input-base {
+    @apply w-full rounded-lg border border-line bg-white px-3 py-2.5 text-sm text-ink placeholder:text-muted/80 transition-colors;
+  }
+
+  .input-base:hover {
+    @apply border-[#CBD5E1];
+  }
+
+  .input-base:focus {
+    @apply border-primary outline-none ring-[3px] ring-primary/15;
+  }
+
+  select.input-base {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23667085' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    background-size: 14px;
+  }
+
+  .input-error {
+    @apply border-crit/70 ring-1 ring-crit/20;
+  }
+
+  .table-head {
+    @apply bg-canvas/80 text-left text-[11px] font-semibold uppercase tracking-[0.06em] text-muted;
+  }
+
+  .table-cell {
+    @apply px-3 py-3 align-middle text-sm;
+  }
+
+  .hide-scrollbar {
+    scrollbar-width: none;
+  }
+
+  .hide-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .text-balance {
+    text-wrap: balance;
+  }
+}
+
+/* Restrained motion, and none at all when the user asks for reduced motion. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

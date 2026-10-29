@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Stockora">
+  <rect width="64" height="64" rx="16" fill="#15803D" />
+  <path d="M16 24.5 32 17l16 7.5-16 7.5-16-7.5Z" fill="#FFFFFF" />
+  <path d="m16 31.5 13 6.1v9.1l-13-6v-9.2Z" fill="#DCFCE7" />
+  <path d="m48 31.5-13 6.1v9.1l13-6v-9.2Z" fill="#A7F3D0" />
+  <path d="m32 39 5.6-2.6L38 32l-1.2-.6L32 34l-4.8-2.6-1.2.6v4.4L32 39Z" fill="#14532D" opacity=".18" />
+</svg>

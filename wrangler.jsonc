@@ -1,0 +1,21 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "stockora",
+  "main": "server/index.ts",
+  "compatibility_date": "2025-09-01",
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "stockora",
+      "database_id": "00000000-0000-0000-0000-000000000001"
+    }
+  ],
+  "dev": {
+    "port": 8787
+  }
+}
