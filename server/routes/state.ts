@@ -174,13 +174,30 @@ export function buildStateRoutes() {
       }
     }
 
-    // Sales history is an append-only ledger with its own endpoints; accepting
-    // it here would let a client bypass the validation and dedupe rules.
-    if ('sales' in patch || 'salesTrackingSince' in patch) {
+    // Sales history and the POS ledgers are append-only: they are written only
+    // by their own endpoints, where the server can validate, price and deduct
+    // atomically. Accepting them here would let a client rewrite recorded
+    // demand or invent completed sales.
+    const IMMUTABLE_HISTORY_KEYS: Array<keyof PersistedState> = ['sales', 'salesTrackingSince'];
+    if (IMMUTABLE_HISTORY_KEYS.some((key) => key in patch)) {
       return respond(
         {
           code: 'immutable_history',
           message: 'Sales history is changed only through the sales import endpoint.',
+        },
+        { status: 400 },
+      );
+    }
+    const IMMUTABLE_LEDGER_KEYS: Array<keyof PersistedState> = [
+      'saleOrders',
+      'inventoryMovements',
+      'receiptCounter',
+    ];
+    if (IMMUTABLE_LEDGER_KEYS.some((key) => key in patch)) {
+      return respond(
+        {
+          code: 'immutable_ledger',
+          message: 'Sales transactions and stock movements are written only by the Point of Sale.',
         },
         { status: 400 },
       );
@@ -239,11 +256,26 @@ export function buildStateRoutes() {
       }
     }
 
-    const next: PersistedState = {
-      ...state,
-      ...(patch as Partial<PersistedState>),
-      version: state.version,
-    };
+    // Only the keys this client is allowed to sync are applied — unknown or
+    // server-owned fields in the payload are ignored rather than merged in.
+    const WRITABLE_KEYS: Array<keyof PersistedState> = [
+      'products',
+      'suppliers',
+      'settings',
+      'activity',
+      'notifications',
+      'reviews',
+      'notifiedKeys',
+      'seededOn',
+    ];
+    const next: PersistedState = { ...state, version: state.version };
+    for (const key of WRITABLE_KEYS) {
+      if (key in patch) {
+        (next as unknown as Record<string, unknown>)[key] = (
+          patch as Record<string, unknown>
+        )[key];
+      }
+    }
     await saveOrgState(c.env, auth.orgId!, next);
     return respond({ ok: true, updatedAt: new Date().toISOString() });
   });

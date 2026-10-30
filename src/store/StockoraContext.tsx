@@ -12,11 +12,13 @@ import {
 import type {
   ActivityEntry,
   AppNotification,
+  InventoryMovement,
   PersistedState,
   Product,
   ProductInput,
   ProductInsight,
   ReviewRecord,
+  SaleOrder,
   SaleRecord,
   Settings,
   Supplier,
@@ -64,6 +66,10 @@ export interface StockoraContextValue {
   suppliers: Supplier[];
   sales: SaleRecord[];
   salesTrackingSince: string | null;
+  /** POS transactions (server-written). Completed sales already sit in `sales`. */
+  saleOrders: SaleOrder[];
+  /** Stock movement ledger for completed sales. */
+  inventoryMovements: InventoryMovement[];
   settings: Settings;
   activity: ActivityEntry[];
   notifications: AppNotification[];
@@ -209,6 +215,9 @@ function createFreshState(now = new Date()): PersistedState {
     notifications: sortNotifications(notifications),
     reviews: [],
     notifiedKeys: notifications.map((item) => item.key).filter((key): key is string => !!key),
+    saleOrders: [],
+    inventoryMovements: [],
+    receiptCounter: 0,
     seededOn: timestamp,
   };
 }
@@ -218,6 +227,7 @@ function mergeSettings(raw: Partial<Settings> | undefined): Settings {
     ...DEFAULT_SETTINGS,
     ...raw,
     notifications: { ...DEFAULT_SETTINGS.notifications, ...(raw?.notifications ?? {}) },
+    pos: { ...DEFAULT_SETTINGS.pos, ...(raw?.pos ?? {}) },
   };
 }
 
@@ -241,6 +251,15 @@ function hydrateServerState(raw: unknown): PersistedState | null {
     notifiedKeys: Array.isArray(parsed.notifiedKeys)
       ? parsed.notifiedKeys.filter((key): key is string => typeof key === 'string')
       : [],
+    // POS ledgers are server-written; missing fields mean an older document.
+    saleOrders: Array.isArray(parsed.saleOrders) ? parsed.saleOrders : [],
+    inventoryMovements: Array.isArray(parsed.inventoryMovements)
+      ? parsed.inventoryMovements
+      : [],
+    receiptCounter:
+      typeof parsed.receiptCounter === 'number' && Number.isFinite(parsed.receiptCounter)
+        ? parsed.receiptCounter
+        : 0,
     seededOn: parsed.seededOn ?? new Date().toISOString(),
   };
 }
@@ -863,6 +882,8 @@ export function StockoraProvider({ children }: { children: ReactNode }) {
     suppliers: state?.suppliers ?? [],
     sales: state?.sales ?? [],
     salesTrackingSince: state?.salesTrackingSince ?? null,
+    saleOrders: state?.saleOrders ?? [],
+    inventoryMovements: state?.inventoryMovements ?? [],
     settings: state?.settings ?? DEFAULT_SETTINGS,
     activity: state?.activity ?? [],
     notifications: state?.notifications ?? [],

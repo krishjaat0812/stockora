@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { AlertTriangle, Calculator, CheckCircle2, Pencil, ShieldAlert, Trash2 } from 'lucide-react';
+import { AlertTriangle, Calculator, CheckCircle2, Pencil, Printer, ScanBarcode, ShieldAlert, Trash2 } from 'lucide-react';
 import type { Product, ProductInsight } from '../types';
 import { useStockora } from '../store/StockoraContext';
 import { useToast } from './toast';
@@ -8,6 +8,7 @@ import { ExpiryStatusBadge, RiskBadge, StockStatusBadge } from './inventory-badg
 import { formatCover, reorderFormula } from '../lib/inventory';
 import { formatCurrency, formatNumber } from '../lib/format';
 import { formatDate, formatDateTime } from '../lib/date';
+import { printProductLabel } from '../lib/print';
 import { DeleteProductDialog } from './DeleteProductDialog';
 import { useAction } from '../auth/AuthContext';
 
@@ -221,6 +222,26 @@ export function ProductDetailDrawer({
                 { label: 'Supplier', value: product.supplierName || 'Not recorded' },
                 { label: 'Unit', value: product.unit || 'Not recorded' },
                 {
+                  label: 'Barcode',
+                  value: product.barcode
+                    ? `${product.barcode}${(product.altBarcodes ?? []).length > 0 ? ` (+${product.altBarcodes!.length} alt)` : ''}`
+                    : 'Not assigned',
+                },
+                {
+                  label: 'Tax rate',
+                  value:
+                    product.taxRatePct && product.taxRatePct > 0 ? `${product.taxRatePct}%` : 'Not taxed',
+                },
+                {
+                  label: 'POS availability',
+                  value:
+                    product.active === false
+                      ? 'Not available for sale'
+                      : product.sellingPrice === null || product.sellingPrice === undefined
+                        ? 'Blocked — no selling price'
+                        : 'Available for sale',
+                },
+                {
                   label: 'Unit cost',
                   value:
                     product.unitCost === null || product.unitCost === undefined
@@ -252,10 +273,31 @@ export function ProductDetailDrawer({
               ].map((item) => (
                 <div key={item.label} className="flex items-center justify-between gap-3 px-3 py-2">
                   <dt className="text-muted">{item.label}</dt>
-                  <dd className="text-right font-medium text-ink">{item.value}</dd>
+                  <dd className="tnum text-right font-medium text-ink">{item.value}</dd>
                 </div>
               ))}
             </dl>
+            <div className="mt-2.5 flex items-center justify-between gap-2">
+              <span className="flex items-center gap-1.5 text-[11px] text-muted">
+                <ScanBarcode className="h-3.5 w-3.5" aria-hidden="true" />
+                Labels print through your browser (EAN/UPC symbols included).
+              </span>
+              <Button
+                size="sm"
+                variant="secondary"
+                icon={<Printer className="h-3.5 w-3.5" aria-hidden="true" />}
+                onClick={() => {
+                  if (!printProductLabel(product, settings)) {
+                    toast.error(
+                      'Print window blocked',
+                      'Allow pop-ups for this site, then try printing the label again.',
+                    );
+                  }
+                }}
+              >
+                Print label
+              </Button>
+            </div>
           </section>
         </div>
       </Drawer>

@@ -14,6 +14,7 @@ export type FeatureId =
   | 'suppliers'
   | 'demand_analytics'
   | 'business_calculator'
+  | 'pos'
   | 'csv_import'
   | 'csv_export'
   | 'notifications';
@@ -106,6 +107,15 @@ export const FEATURES: FeatureDef[] = [
     globallyEnabled: true,
   },
   {
+    id: 'pos',
+    label: 'Scan & Sell (POS)',
+    description:
+      'Barcode checkout: scan or search products, take payment, print receipts and deduct stock automatically.',
+    group: 'data',
+    dependencies: ['inventory'],
+    globallyEnabled: true,
+  },
+  {
     id: 'csv_import',
     label: 'CSV Import',
     description: 'Upload and validate inventory CSV files.',
@@ -162,6 +172,7 @@ export const CONTENT_FEATURES: FeatureId[] = [
   'suppliers',
   'demand_analytics',
   'business_calculator',
+  'pos',
   'csv_import',
   'csv_export',
 ];
@@ -184,7 +195,8 @@ export const PLANS: Plan[] = [
   {
     id: 'growth',
     name: 'Growth',
-    description: 'Adds the Action Center, Reorder Planner, Suppliers, Demand Analytics, Business Calculator and CSV workflows.',
+    description:
+      'Adds the Action Center, Reorder Planner, Suppliers, Demand Analytics, Business Calculator, Scan & Sell POS and CSV workflows.',
     features: [
       'dashboard',
       'inventory',
@@ -194,6 +206,7 @@ export const PLANS: Plan[] = [
       'suppliers',
       'demand_analytics',
       'business_calculator',
+      'pos',
       'notifications',
       'csv_import',
       'csv_export',
@@ -283,6 +296,10 @@ export const ACTION_DESCRIPTIONS: Record<ActionId, string> = {
 /**
  * Which actions each feature actually performs. The admin UI only offers
  * these — a control the backend cannot enforce must never be displayed.
+ *
+ * POS meaning: view = open the till and sales history; create = record a sale
+ * or confirm a pending payment; edit = apply item/order discounts; delete =
+ * cancel a transaction that has not completed; export = download sales CSV.
  */
 export const FEATURE_ACTIONS: Record<FeatureId, ActionId[]> = {
   dashboard: ['view'],
@@ -294,6 +311,7 @@ export const FEATURE_ACTIONS: Record<FeatureId, ActionId[]> = {
   suppliers: ['view', 'create', 'edit', 'delete'],
   demand_analytics: ['view', 'create', 'delete'],
   business_calculator: ['view'],
+  pos: ['view', 'create', 'edit', 'delete', 'export'],
   csv_import: ['view', 'create'],
   csv_export: ['view', 'export'],
   notifications: ['view', 'edit', 'delete'],
@@ -432,6 +450,7 @@ export const FEATURE_ROUTES: RouteDef[] = [
   { path: '/suppliers', feature: 'suppliers', label: 'Suppliers' },
   { path: '/demand', feature: 'demand_analytics', label: 'Demand Analytics' },
   { path: '/calculator', feature: 'business_calculator', label: 'Business Calculator' },
+  { path: '/pos', feature: 'pos', label: 'Scan & Sell' },
 ];
 
 /** Route path for a feature (used for fallbacks and navigation). */

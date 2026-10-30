@@ -32,6 +32,42 @@ export class ExportDeniedError extends Error {
  * permission and streams the file back; the rows are exactly what the user
  * is currently viewing (filters included).
  */
+/**
+ * Server-built POS sales export. The Worker assembles the rows from its own
+ * transaction ledger (not from the browser) and checks the pos:export action.
+ */
+export async function exportSalesCsv(from: string, to: string, filename: string): Promise<void> {
+  const response = await fetch('/api/pos/export', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Stockora-Client': 'web' },
+    credentials: 'same-origin',
+    body: JSON.stringify({ from, to }),
+  });
+  if (!response.ok) {
+    let message = 'Export failed. Try again.';
+    try {
+      const body = (await response.json()) as { message?: string };
+      if (body.message) message = body.message;
+    } catch {
+      // keep the default message
+    }
+    if (response.status === 403) throw new ExportDeniedError(message);
+    throw new Error(message);
+  }
+  const disposition = response.headers.get('Content-Disposition') ?? '';
+  const match = /filename="([^"]+)"/.exec(disposition);
+  const name = match?.[1] ?? (filename.endsWith('.csv') ? filename : `${filename}.csv`);
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = name;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
 export async function exportCsv(
   filename: string,
   table: CsvTable,

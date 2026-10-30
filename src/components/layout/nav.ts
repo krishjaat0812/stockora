@@ -6,6 +6,7 @@ import {
   CalendarClock,
   ClipboardList,
   LayoutDashboard,
+  ScanBarcode,
   Settings as SettingsIcon,
   ShieldCheck,
   TrendingUp,
@@ -40,6 +41,14 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Boxes,
     description: 'Products, stock and expiry dates',
     feature: 'inventory' as FeatureId,
+  },
+  {
+    to: '/pos',
+    label: 'Scan & Sell',
+    shortLabel: 'Sell',
+    icon: ScanBarcode,
+    description: 'Barcode checkout and receipts',
+    feature: 'pos' as FeatureId,
   },
   {
     to: '/suppliers',
@@ -120,7 +129,7 @@ export function permittedNavItems(permissions: Permissions): NavItem[] {
   return NAV_ITEMS.filter((item) => item.feature === null || permissions[item.feature]);
 }
 
-const SHORT_MOBILE = ['/', '/inventory', '/actions', '/reorder', '/expiry'];
+const SHORT_MOBILE = ['/', '/pos', '/inventory', '/actions', '/reorder', '/expiry'];
 
 /** Compact bottom-bar items, permission filtered. */
 export function mobileNavItems(permissions: Permissions): NavItem[] {

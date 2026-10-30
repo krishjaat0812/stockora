@@ -103,6 +103,7 @@ describe('dependentFeatures', () => {
         'reorder_planner',
         'suppliers',
         'demand_analytics',
+        'pos',
       ].sort(),
     );
   });

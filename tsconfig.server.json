@@ -13,5 +13,5 @@
     "noFallthroughCasesInSwitch": true
   },
   "include": ["server/**/*.ts", "src/shared/**/*.ts", "src/lib/**/*.ts", "src/data/**/*.ts", "src/types.ts"],
-  "exclude": ["src/lib/download.ts"]
+  "exclude": ["src/lib/download.ts", "src/lib/print.ts"]
 }

@@ -1,5 +1,11 @@
 import type { Product, ProductInput } from '../types';
 import { isValidDateString } from './inventory';
+import {
+  barcodeConflict,
+  barcodeFormatError,
+  normalizeAltBarcodes,
+  normalizeBarcode,
+} from './barcode';
 
 export interface ProductFormValues {
   sku: string;
@@ -15,6 +21,16 @@ export interface ProductFormValues {
   unit: string;
   unitCost: string;
   sellingPrice: string;
+  /** Primary barcode, or empty when the product has none. */
+  barcode: string;
+  /** Alternative barcodes as a comma-separated list. */
+  altBarcodes: string;
+  /** Tax rate percent as text, empty = not taxed. */
+  taxRatePct: string;
+  /** Sold by weight/measure — allows decimal quantities at the POS. */
+  allowFractional: boolean;
+  /** false = retained but not sellable at the POS. */
+  active: boolean;
 }
 
 export type ProductFieldErrors = Partial<Record<keyof ProductFormValues, string>>;
@@ -33,6 +49,11 @@ export const EMPTY_PRODUCT_FORM: ProductFormValues = {
   unit: '',
   unitCost: '',
   sellingPrice: '',
+  barcode: '',
+  altBarcodes: '',
+  taxRatePct: '',
+  allowFractional: false,
+  active: true,
 };
 
 export function productToForm(product: Product): ProductFormValues {
@@ -54,6 +75,14 @@ export function productToForm(product: Product): ProductFormValues {
       product.sellingPrice === null || product.sellingPrice === undefined
         ? ''
         : String(product.sellingPrice),
+    barcode: product.barcode ?? '',
+    altBarcodes: (product.altBarcodes ?? []).join(', '),
+    taxRatePct:
+      product.taxRatePct === null || product.taxRatePct === undefined
+        ? ''
+        : String(product.taxRatePct),
+    allowFractional: product.allowFractional === true,
+    active: product.active !== false,
   };
 }
 
@@ -142,6 +171,46 @@ export function validateProductInput(
     errors.sellingPrice = 'Selling price cannot be negative.';
   }
 
+  // ---- Barcodes: format + tenant-wide uniqueness (primary and alternatives)
+  const barcode = normalizeBarcode(input.barcode);
+  if (barcode) {
+    const formatError = barcodeFormatError(barcode);
+    if (formatError) {
+      errors.barcode = formatError;
+    } else {
+      const conflict = barcodeConflict(options.products, barcode, options.editingId);
+      if (conflict) {
+        errors.barcode = `Barcode ${barcode} already belongs to ${conflict.name} (${conflict.sku}). Barcodes must be unique in your shop.`;
+      }
+    }
+  }
+
+  const altBarcodes = normalizeAltBarcodes(input.altBarcodes);
+  for (const alt of altBarcodes) {
+    const formatError = barcodeFormatError(alt);
+    if (formatError) {
+      errors.altBarcodes = `Alternative barcode "${alt}": ${formatError}`;
+      break;
+    }
+    if (alt.toLowerCase() === barcode.toLowerCase()) {
+      errors.altBarcodes = 'Alternative barcodes must be different from the primary barcode.';
+      break;
+    }
+    const conflict = barcodeConflict(options.products, alt, options.editingId);
+    if (conflict) {
+      errors.altBarcodes = `Barcode ${alt} already belongs to ${conflict.name} (${conflict.sku}). Barcodes must be unique in your shop.`;
+      break;
+    }
+  }
+
+  if (
+    input.taxRatePct !== null &&
+    input.taxRatePct !== undefined &&
+    (!Number.isFinite(input.taxRatePct) || input.taxRatePct < 0 || input.taxRatePct > 100)
+  ) {
+    errors.taxRatePct = 'Tax rate must be between 0 and 100 percent.';
+  }
+
   return errors;
 }
 
@@ -158,12 +227,9 @@ export function validateProductForm(
 ): { errors: ProductFieldErrors; input: ProductInput | null } {
   const errors: ProductFieldErrors = {};
 
-  const numericFields: Array<keyof ProductFormValues> = [
-    'currentStock',
-    'reorderLevel',
-    'averageDailySales',
-    'leadTimeDays',
-  ];
+  const numericFields: Array<
+    'currentStock' | 'reorderLevel' | 'averageDailySales' | 'leadTimeDays'
+  > = ['currentStock', 'reorderLevel', 'averageDailySales', 'leadTimeDays'];
   for (const field of numericFields) {
     if (values[field].trim() === '') {
       errors[field] =
@@ -196,6 +262,24 @@ export function validateProductForm(
     else sellingPrice = parsed;
   }
 
+  const barcodeRaw = values.barcode.trim();
+  const barcode = barcodeRaw === '' ? null : normalizeBarcode(barcodeRaw);
+
+  const altBarcodes = normalizeAltBarcodes(
+    values.altBarcodes
+      .split(/[,;\n]/)
+      .map((entry) => entry.trim())
+      .filter(Boolean),
+  );
+
+  const taxRateRaw = values.taxRatePct.trim();
+  let taxRatePct: number | null = null;
+  if (taxRateRaw !== '') {
+    const parsed = parseNumber(taxRateRaw);
+    if (Number.isNaN(parsed)) errors.taxRatePct = 'Enter a valid tax rate.';
+    else taxRatePct = parsed;
+  }
+
   const input: ProductInput = {
     sku: values.sku.trim().toUpperCase(),
     name: values.name.trim(),
@@ -210,6 +294,11 @@ export function validateProductForm(
     unit: values.unit.trim() || undefined,
     unitCost,
     sellingPrice,
+    barcode,
+    altBarcodes,
+    taxRatePct,
+    allowFractional: values.allowFractional === true,
+    active: values.active !== false,
   };
 
   const merged = { ...validateProductInput(input, options) };

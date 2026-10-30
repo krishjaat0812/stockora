@@ -14,6 +14,10 @@ interface SeedRow {
   unit: string;
   unitCost: number;
   sellingPrice: number;
+  /** Printed EAN-13 the demo cashier can scan at the POS (valid check digits). */
+  barcode: string;
+  /** Demo GST rate in percent — per product, never a universal rate. */
+  taxRatePct: number;
 }
 
 /**
@@ -35,6 +39,8 @@ const SEED_ROWS: SeedRow[] = [
     unit: 'L',
     unitCost: 62,
     sellingPrice: 70,
+    barcode: '8901234000014',
+    taxRatePct: 0,
   },
   {
     sku: 'R102',
@@ -49,6 +55,8 @@ const SEED_ROWS: SeedRow[] = [
     unit: 'bag',
     unitCost: 420,
     sellingPrice: 485,
+    barcode: '8901234000021',
+    taxRatePct: 5,
   },
   {
     sku: 'R103',
@@ -63,6 +71,8 @@ const SEED_ROWS: SeedRow[] = [
     unit: 'loaf',
     unitCost: 32,
     sellingPrice: 40,
+    barcode: '8901234000038',
+    taxRatePct: 5,
   },
   {
     sku: 'R104',
@@ -77,6 +87,8 @@ const SEED_ROWS: SeedRow[] = [
     unit: 'bottle',
     unitCost: 85,
     sellingPrice: 100,
+    barcode: '8901234000045',
+    taxRatePct: 12,
   },
   {
     sku: 'R105',
@@ -91,6 +103,8 @@ const SEED_ROWS: SeedRow[] = [
     unit: 'cup',
     unitCost: 45,
     sellingPrice: 55,
+    barcode: '8901234000052',
+    taxRatePct: 5,
   },
   {
     sku: 'R106',
@@ -105,6 +119,8 @@ const SEED_ROWS: SeedRow[] = [
     unit: 'bar',
     unitCost: 28,
     sellingPrice: 35,
+    barcode: '8901234000069',
+    taxRatePct: 18,
   },
 ];
 
@@ -118,6 +134,12 @@ export const DEFAULT_SETTINGS: Settings = {
     nearExpiry: true,
     expired: true,
     dataUpdates: true,
+  },
+  pos: {
+    paymentMethods: ['cash', 'upi', 'card', 'other'],
+    taxInclusive: false,
+    requirePaymentConfirmation: false,
+    receiptFooter: 'Prices include applicable GST where charged separately. Goods once sold are subject to shop policy.',
   },
 };
 
@@ -227,6 +249,9 @@ export function createSeedProducts(today: Date = new Date(), timestamp: string =
     unit: row.unit,
     unitCost: row.unitCost,
     sellingPrice: row.sellingPrice,
+    barcode: row.barcode,
+    taxRatePct: row.taxRatePct,
+    active: true,
     createdAt: timestamp,
     updatedAt: timestamp,
   }));

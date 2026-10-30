@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Calculator, CalendarClock, Info } from 'lucide-react';
+import { Calculator, CalendarClock, Info, ScanBarcode } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import type { Product } from '../types';
 import { useStockora } from '../store/StockoraContext';
@@ -79,6 +79,10 @@ export function ProductFormDialog({
   const updateField = (field: keyof ProductFormValues, value: string) => {
     setValues((current) => ({ ...current, [field]: value }));
     if (errors[field]) setErrors((current) => ({ ...current, [field]: undefined }));
+  };
+
+  const updateBool = (field: 'allowFractional' | 'active', value: boolean) => {
+    setValues((current) => ({ ...current, [field]: value }));
   };
 
   const updateSupplierLink = (supplierId: string) => {
@@ -308,6 +312,91 @@ export function ProductFormDialog({
               {...errorProps('sellingPrice')}
             />
           </Field>
+        </div>
+
+        <div className="rounded-xl border border-line bg-canvas/50 p-4">
+          <div className="mb-3 flex items-center gap-2">
+            <ScanBarcode className="h-4 w-4 text-primary" aria-hidden="true" />
+            <h3 className="text-sm font-semibold text-ink">Barcode &amp; selling rules</h3>
+          </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <Field
+              label="Barcode"
+              htmlFor="product-barcode"
+              error={errors.barcode}
+              hint="What the scanner reads. Unique in your shop; can differ from the SKU."
+            >
+              <TextInput
+                id="product-barcode"
+                value={values.barcode}
+                onChange={(event) => updateField('barcode', event.target.value)}
+                placeholder="8901234000014"
+                autoComplete="off"
+                maxLength={64}
+                {...errorProps('barcode')}
+              />
+            </Field>
+            <Field
+              label="Alternative barcodes"
+              htmlFor="product-altBarcodes"
+              error={errors.altBarcodes}
+              hint="Optional. Comma-separated — for supplier stickers that differ."
+            >
+              <TextInput
+                id="product-altBarcodes"
+                value={values.altBarcodes}
+                onChange={(event) => updateField('altBarcodes', event.target.value)}
+                placeholder="4006381333931, 12345678"
+                autoComplete="off"
+                maxLength={200}
+                {...errorProps('altBarcodes')}
+              />
+            </Field>
+            <Field
+              label="Tax rate (%)"
+              htmlFor="product-taxRatePct"
+              error={errors.taxRatePct}
+              hint="Optional GST rate charged at checkout. Leave empty for no tax."
+            >
+              <NumberInput
+                id="product-taxRatePct"
+                value={values.taxRatePct}
+                onChange={(event) => updateField('taxRatePct', event.target.value)}
+                min={0}
+                max={100}
+                step={0.5}
+                placeholder="18"
+                {...errorProps('taxRatePct')}
+              />
+            </Field>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-x-6 gap-y-2">
+            <label className="flex cursor-pointer items-center gap-2 text-[13px] font-medium text-ink">
+              <input
+                type="checkbox"
+                checked={values.active}
+                onChange={(event) => updateBool('active', event.target.checked)}
+                className="h-4 w-4 rounded border-line text-primary focus:ring-primary"
+              />
+              Available for sale at the POS
+            </label>
+            <label className="flex cursor-pointer items-center gap-2 text-[13px] font-medium text-ink">
+              <input
+                type="checkbox"
+                checked={values.allowFractional}
+                onChange={(event) => updateBool('allowFractional', event.target.checked)}
+                className="h-4 w-4 rounded border-line text-primary focus:ring-primary"
+              />
+              Allow fractional quantities (sold by weight)
+            </label>
+          </div>
+          <p className="mt-2 text-[11px] leading-4 text-muted">
+            Scanning never changes stock — stock is deducted only when a sale is completed at the{' '}
+            <Link to="/pos" className="font-semibold text-primary-dark hover:underline">
+              Scan &amp; Sell
+            </Link>{' '}
+            till.
+          </p>
         </div>
 
         {suppliers.length > 0 ? (

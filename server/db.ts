@@ -169,6 +169,9 @@ export interface SecurityPolicyRow {
 const COLUMN_MIGRATIONS = [
   `ALTER TABLE security_policies ADD COLUMN allow_client_password_change INTEGER NOT NULL DEFAULT 1`,
   `ALTER TABLE organizations ADD COLUMN password_change_policy TEXT NOT NULL DEFAULT 'inherit'`,
+  // Optimistic-concurrency token for the workspace document: every write bumps
+  // it, so a POS checkout can retry instead of overwriting a concurrent sale.
+  `ALTER TABLE org_state ADD COLUMN version INTEGER NOT NULL DEFAULT 0`,
 ];
 
 async function applyColumnMigrations(env: Env): Promise<void> {
@@ -334,6 +337,13 @@ export function normalizePersistedState(raw: PersistedState): PersistedState {
     sales: Array.isArray(raw.sales) ? raw.sales : [],
     salesTrackingSince:
       typeof raw.salesTrackingSince === 'string' ? raw.salesTrackingSince : null,
+    // POS documents written before the barcode release keep empty ledgers.
+    saleOrders: Array.isArray(raw.saleOrders) ? raw.saleOrders : [],
+    inventoryMovements: Array.isArray(raw.inventoryMovements) ? raw.inventoryMovements : [],
+    receiptCounter:
+      typeof raw.receiptCounter === 'number' && Number.isFinite(raw.receiptCounter)
+        ? Math.max(0, Math.floor(raw.receiptCounter))
+        : 0,
   };
 }
 
@@ -387,6 +397,9 @@ export async function ensureOrgState(
     notifications: [],
     reviews: [],
     notifiedKeys: [],
+    saleOrders: [],
+    inventoryMovements: [],
+    receiptCounter: 0,
     seededOn: timestamp,
   };
   await env.DB.prepare(
@@ -400,8 +413,61 @@ export async function ensureOrgState(
 
 export async function saveOrgState(env: Env, orgId: string, state: PersistedState): Promise<void> {
   await env.DB.prepare(
-    'INSERT INTO org_state (org_id, state_json, updated_at) VALUES (?, ?, ?) ON CONFLICT(org_id) DO UPDATE SET state_json = excluded.state_json, updated_at = excluded.updated_at',
+    'INSERT INTO org_state (org_id, state_json, updated_at, version) VALUES (?, ?, ?, 0) ON CONFLICT(org_id) DO UPDATE SET state_json = excluded.state_json, updated_at = excluded.updated_at, version = org_state.version + 1',
   )
     .bind(orgId, JSON.stringify(state), new Date().toISOString())
     .run();
+}
+
+export interface OrgStateSnapshot {
+  state: PersistedState;
+  /** Concurrency token to pass to {@link saveOrgStateCas}. */
+  version: number;
+}
+
+/**
+ * Reads the workspace document together with its version token in one query,
+ * so the version always belongs to the state that was returned.
+ */
+export async function readOrgStateForUpdate(
+  env: Env,
+  orgId: string,
+  shopName?: string | null,
+): Promise<OrgStateSnapshot> {
+  await ensureOrgState(env, orgId, shopName);
+  const row = await env.DB.prepare('SELECT state_json, version FROM org_state WHERE org_id = ?')
+    .bind(orgId)
+    .first<{ state_json: string; version: number }>();
+  if (!row) {
+    // ensureOrgState just created it; a second read is cheap and safe.
+    const created = await ensureOrgState(env, orgId, shopName);
+    return { state: created, version: 0 };
+  }
+  let parsed: PersistedState;
+  try {
+    parsed = normalizePersistedState(JSON.parse(row.state_json) as PersistedState);
+  } catch {
+    parsed = normalizePersistedState(await ensureOrgState(env, orgId, shopName));
+  }
+  return { state: parsed, version: row.version ?? 0 };
+}
+
+/**
+ * Compare-and-swap save: succeeds only when nobody else wrote since the read.
+ * Returns false when the document moved on, and the caller must re-read,
+ * re-validate and retry — this is what prevents two tills from selling the
+ * same last unit.
+ */
+export async function saveOrgStateCas(
+  env: Env,
+  orgId: string,
+  state: PersistedState,
+  expectedVersion: number,
+): Promise<boolean> {
+  const result = await env.DB.prepare(
+    'UPDATE org_state SET state_json = ?, updated_at = ?, version = version + 1 WHERE org_id = ? AND version = ?',
+  )
+    .bind(JSON.stringify(state), new Date().toISOString(), orgId, expectedVersion)
+    .run();
+  return (result.meta.changes ?? 0) > 0;
 }

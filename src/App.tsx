@@ -8,6 +8,7 @@ import { FeatureGate, RequireAdmin, RequireAuth, RequireClient } from './auth/gu
 import { StockoraProvider } from './store/StockoraContext';
 import OverviewPage from './pages/OverviewPage';
 import InventoryPage from './pages/InventoryPage';
+import PosPage from './pages/PosPage';
 import ActionsPage from './pages/ActionsPage';
 import ExpiryPage from './pages/ExpiryPage';
 import ReorderPage from './pages/ReorderPage';
@@ -120,6 +121,14 @@ export default function App() {
                 element={
                   <FeatureGate feature="inventory">
                     <InventoryPage />
+                  </FeatureGate>
+                }
+              />
+              <Route
+                path="/pos"
+                element={
+                  <FeatureGate feature="pos">
+                    <PosPage />
                   </FeatureGate>
                 }
               />

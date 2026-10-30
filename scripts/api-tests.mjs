@@ -1105,6 +1105,175 @@ async function main() {
     (await req('GET', '/api/admin/audit-logs', { cookie: freshOwnerLogin.session })).status === 403;
   check('client cannot read audit logs', auditDenier, 'expected 403 with a valid client session');
 
+  // ---------- Test 15: barcode lookup & POS checkout ----------
+  console.log('\n[15] Barcode & Point of Sale');
+  const posCookie = freshOwnerLogin.session ?? ownerCookie;
+  const anonLookup = await req('GET', '/api/pos/lookup?code=8901234000014');
+  check('anonymous barcode lookup is rejected', anonLookup.status === 401);
+
+  const seededLookup = await req('GET', '/api/pos/lookup?code=8901234000014', { cookie: posCookie });
+  check('seeded barcode resolves to the right product',
+    seededLookup.status === 200 && seededLookup.json?.product?.sku === 'R101',
+    `sku=${seededLookup.json?.product?.sku}`);
+  check('lookup returns the server-side selling price',
+    typeof seededLookup.json?.product?.sellingPrice === 'number');
+
+  const unknownLookup = await req('GET', '/api/pos/lookup?code=0000000000000', { cookie: posCookie });
+  check('an unknown barcode returns 404 and invents nothing',
+    unknownLookup.status === 404 && unknownLookup.json?.code === 'not_found',
+    `status ${unknownLookup.status}`);
+
+  const baseState = await req('GET', '/api/state', { cookie: posCookie });
+  const originalProducts = baseState.json?.products ?? [];
+  const stampNow = Date.now();
+  const probe = {
+    id: `pos-probe-${stampNow}`,
+    sku: `POS${String(stampNow).slice(-6)}`,
+    name: 'POS probe product',
+    category: 'Test',
+    currentStock: 5,
+    reorderLevel: 2,
+    averageDailySales: 1,
+    leadTimeDays: 1,
+    expiryDate: null,
+    sellingPrice: 50,
+    barcode: `9000${String(stampNow).slice(-8)}`,
+    taxRatePct: 0,
+    active: true,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  const addProbe = await req('PUT', '/api/state', {
+    cookie: posCookie,
+    body: { products: [...originalProducts, probe] },
+  });
+  check('a product with a barcode can be saved',
+    addProbe.status === 200,
+    `status ${addProbe.status}: ${addProbe.json?.message ?? ''}`);
+
+  const duplicateBarcode = await req('PUT', '/api/state', {
+    cookie: posCookie,
+    body: {
+      products: [
+        ...originalProducts,
+        probe,
+        { ...probe, id: `${probe.id}-dup`, sku: `${probe.sku}D`, name: 'Duplicate barcode probe' },
+      ],
+    },
+  });
+  check('a duplicate barcode in the same shop is rejected',
+    duplicateBarcode.status === 400 && /already belongs/i.test(duplicateBarcode.json?.message ?? ''),
+    `status ${duplicateBarcode.status}: ${duplicateBarcode.json?.message ?? ''}`);
+
+  const probeLookup = await req('GET', `/api/pos/lookup?code=${probe.barcode}`, { cookie: posCookie });
+  check('a newly assigned barcode is immediately scannable',
+    probeLookup.status === 200 && probeLookup.json?.product?.id === probe.id);
+
+  const idempotencyKey = `api-pos-${stampNow}`;
+  const checkoutBody = {
+    idempotencyKey,
+    lines: [{ productId: probe.id, quantity: 2 }],
+    paymentMethod: 'cash',
+    amountReceived: 200,
+  };
+  const sale = await req('POST', '/api/pos/checkout', { cookie: posCookie, body: checkoutBody });
+  check('checkout completes the sale',
+    sale.status === 201 && sale.json?.order?.status === 'completed',
+    `status ${sale.status}: ${sale.json?.message ?? ''}`);
+  check('a receipt number is issued',
+    /^RCPT-\d{6}$/.test(sale.json?.order?.receiptNumber ?? ''),
+    `receipt=${sale.json?.order?.receiptNumber}`);
+
+  const afterSale = await req('GET', '/api/state', { cookie: posCookie });
+  const probeAfter = (afterSale.json?.products ?? []).find((product) => product.id === probe.id);
+  check('stock is deducted exactly once',
+    probeAfter?.currentStock === probe.currentStock - 2,
+    `stock=${probeAfter?.currentStock}`);
+  check('the sale line reaches the demand ledger',
+    (afterSale.json?.sales ?? []).some(
+      (row) => row.saleId === sale.json?.order?.id && row.source === 'pos',
+    ));
+  check('an inventory movement is recorded',
+    (afterSale.json?.inventoryMovements ?? []).some(
+      (movement) => movement.saleId === sale.json?.order?.id && movement.quantityChange === -2,
+    ));
+
+  const replay = await req('POST', '/api/pos/checkout', { cookie: posCookie, body: checkoutBody });
+  check('a replayed checkout returns the same transaction',
+    replay.status === 200 &&
+      replay.json?.duplicate === true &&
+      replay.json?.order?.id === sale.json?.order?.id,
+    `status ${replay.status}`);
+  const afterReplay = await req('GET', '/api/state', { cookie: posCookie });
+  const probeAfterReplay = (afterReplay.json?.products ?? []).find((product) => product.id === probe.id);
+  check('the replay does not deduct stock again',
+    probeAfterReplay?.currentStock === probeAfter?.currentStock);
+
+  const oversell = await req('POST', '/api/pos/checkout', {
+    cookie: posCookie,
+    body: {
+      ...checkoutBody,
+      idempotencyKey: `${idempotencyKey}-over`,
+      lines: [{ productId: probe.id, quantity: 9999 }],
+    },
+  });
+  check('insufficient stock is rejected',
+    oversell.status === 409 && oversell.json?.code === 'insufficient_stock',
+    `status ${oversell.status} code=${oversell.json?.code}`);
+
+  const priceTamper = await req('POST', '/api/pos/checkout', {
+    cookie: posCookie,
+    body: {
+      ...checkoutBody,
+      idempotencyKey: `${idempotencyKey}-price`,
+      lines: [{ productId: probe.id, quantity: 1, unitPrice: 1 }],
+    },
+  });
+  check('a client-supplied price is ignored',
+    priceTamper.status === 201 && priceTamper.json?.order?.lines?.[0]?.unitPrice === 50,
+    `unitPrice=${priceTamper.json?.order?.lines?.[0]?.unitPrice}`);
+
+  const ledgerTamper = await req('PUT', '/api/state', {
+    cookie: posCookie,
+    body: { saleOrders: [] },
+  });
+  check('POS transactions cannot be rewritten via the state endpoint',
+    ledgerTamper.status === 400 && ledgerTamper.json?.code === 'immutable_ledger',
+    `status ${ledgerTamper.status} code=${ledgerTamper.json?.code}`);
+
+  if (orgA?.id) {
+    await req('PUT', `/api/admin/clients/${orgA.id}/features`, {
+      cookie: adminCookie,
+      body: { selection: FULL_ACCESS.filter((id) => id !== 'pos') },
+    });
+    const posDenied = await req('GET', `/api/pos/lookup?code=${probe.barcode}`, { cookie: posCookie });
+    check('POS lookup is blocked when the feature is disabled',
+      posDenied.status === 403 && posDenied.json?.feature === 'pos',
+      `status ${posDenied.status}`);
+    const checkoutDenied = await req('POST', '/api/pos/checkout', {
+      cookie: posCookie,
+      body: { ...checkoutBody, idempotencyKey: `${idempotencyKey}-off` },
+    });
+    check('checkout is blocked when the feature is disabled',
+      checkoutDenied.status === 403,
+      `status ${checkoutDenied.status}`);
+    await req('PUT', `/api/admin/clients/${orgA.id}/features`, {
+      cookie: adminCookie,
+      body: { selection: FULL_ACCESS },
+    });
+  }
+
+  const adminPos = await req('GET', '/api/pos/lookup?code=8901234000014', { cookie: adminCookie });
+  check('a platform administrator has no shop POS access',
+    adminPos.status === 403,
+    `status ${adminPos.status}`);
+
+  const cleanupProbe = await req('PUT', '/api/state', {
+    cookie: posCookie,
+    body: { products: originalProducts },
+  });
+  check('the POS probe product is cleaned up', cleanupProbe.status === 200, `status ${cleanupProbe.status}`);
+
   // ---------- Summary ----------
   console.log(`\n${passed} passed, ${failures.length} failed`);
   if (failures.length > 0) {

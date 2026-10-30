@@ -4,6 +4,7 @@ import type { Env } from './env';
 import { allowedOrigins, respond } from './http';
 import { buildAdminRoutes } from './routes/admin';
 import { buildAuthRoutes } from './routes/auth';
+import { buildPosRoutes } from './routes/pos';
 import { buildStateRoutes } from './routes/state';
 
 /**
@@ -26,8 +27,14 @@ app.use('*', async (c, next) => {
 const MUTATING = ['POST', 'PUT', 'PATCH', 'DELETE'];
 app.use('*', async (c, next) => {
   if (MUTATING.includes(c.req.method)) {
-    const origin = c.req.header('Origin');
-    if (origin && !allowedOrigins(c.env).includes(origin.replace(/\/$/, ''))) {
+    const origin = c.req.header('Origin')?.replace(/\/$/, '');
+    // A same-origin request is always legitimate: browsers cannot forge the
+    // Origin header, and the Worker is served on the deployment's own host, so
+    // a fresh deployment works without extra configuration. APP_ORIGINS still
+    // allows explicitly configured additional origins (for example a custom
+    // domain in front of the Worker).
+    const requestOrigin = new URL(c.req.url).origin;
+    if (origin && origin !== requestOrigin && !allowedOrigins(c.env).includes(origin)) {
       return respond(
         { code: 'origin_denied', message: 'Request origin not allowed.' },
         { status: 403 },
@@ -39,6 +46,7 @@ app.use('*', async (c, next) => {
 
 app.route('/api/auth', buildAuthRoutes());
 app.route('/api/admin', buildAdminRoutes());
+app.route('/api/pos', buildPosRoutes());
 app.route('/api/state', buildStateRoutes());
 
 app.notFound(async (c) => {

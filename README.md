@@ -18,7 +18,7 @@ Requirements: Node.js 18+ (developed on Node 24) and npm.
 npm install
 npm run dev        # SPA on http://127.0.0.1:5173
 npm run dev:server # Worker + local D1 on http://127.0.0.1:8787 (run alongside)
-npm run test       # 156 business-logic tests
+npm run test       # 204 business-logic tests
 npm run typecheck  # browser and Worker TypeScript
 npm run build      # typecheck + production build
 npm run api:test   # API integration tests against a running Worker
@@ -45,7 +45,8 @@ These demo accounts are created **only when `DEV_LINKS=true`** (the local `.env`
 - Recharts for the inventory-health donut and priority chart
 - Lucide React icons
 - Hono on a Cloudflare Worker for the API, with D1 for storage
-- Vitest for the inventory, CSV, validation, calculator, permission and password suites
+- `@zxing/browser` for the optional camera barcode scanner (lazy-loaded, browser-side only)
+- Vitest for the inventory, CSV, validation, calculator, barcode, POS, permission and password suites
 
 ---
 
@@ -64,6 +65,17 @@ These demo accounts are created **only when `DEV_LINKS=true`** (the local `.env`
 - Desktop/tablet table with every required column; a card layout on smaller screens (actions remain reachable).
 - Product detail drawer with the reorder formula, expiry context, safety notes and review state.
 - CSV export of the currently filtered list.
+
+### Scan & Sell (POS)
+- Three ways to scan: a USB/Bluetooth keyboard-wedge scanner (Enter or Tab suffix, input refocused after every scan), manual entry or paste, and an optional camera scanner (`@zxing/browser`, EAN-13 / UPC-A / EAN-8 / Code 128). The camera needs a secure context (HTTPS or localhost) and permission; frames are decoded in the browser and never stored or uploaded.
+- Products carry a primary barcode plus optional alternative barcodes, separate from the SKU. Barcodes are trimmed, case-insensitive and unique **within the shop**; the same rule runs in the product form, the CSV import and the Worker, so two products can never answer to one code. Unknown codes show “Product not found” with the scanned value kept for review — no product, price or tax rate is invented.
+- Scanning only reads. Each scan validates the code, resolves it inside the signed-in organisation, checks the product is active, priced, unexpired and in stock, then adds it to the cart. A repeat scan increments the existing line instead of duplicating it; fractional quantities are accepted only for products flagged as sold by weight or unit.
+- Checkout re-reads every price and stock level on the server, then recalculates each line (item discount → proportional order discount → per-product tax, inclusive or exclusive, 2-decimal rounding with totals equal to the sum of lines). Stale carts, invalid quantities, unauthorised discounts and insufficient stock are rejected with a specific message.
+- A sale completes in **one atomic write**: order + sales-ledger lines (`source: 'pos'`, linked by `saleId`) + stock deduction + inventory movements (previous/resulting stock, actor, sale id) + activity entry. Concurrent tills save through an `org_state.version` compare-and-swap, so two sales cannot both spend the same last unit.
+- `idempotencyKey` is mandatory: a double-click, retry or replay returns the existing transaction with `duplicate: true` and moves no stock. Cancelling a pending sale leaves stock untouched, and a completed sale cannot be cancelled (no refunds are implemented).
+- Payment: cash, UPI, card or other as enabled by the shop; cash records the amount tendered and the change due. This is a **cashier-confirmed record, not a processed payment** — no gateway is connected and no card, CVV or PIN is ever collected.
+- Receipts use `RCPT-000001` numbering and print through the browser's print workflow with shop footer, cashier, per-line tax and totals; pending transactions print marked as awaiting payment. If `settings.pos.requirePaymentConfirmation` is on, checkout first saves a **pending** transaction and stock moves only when the cashier confirms — the confirmation revalidates stock before deducting.
+- Permissions reuse the existing action model on a new `pos` feature (requires Inventory): `view` opens the till, `create` records/confirms a sale, `edit` applies discounts, `delete` cancels a pending sale, `export` downloads the sales CSV. Every POS endpoint enforces its own action server-side.
 
 ### Action Center
 - One unified queue: expired (P0) → combined risk (P1) → low stock (P2) → near expiry only (P3).
@@ -108,6 +120,7 @@ These demo accounts are created **only when `DEV_LINKS=true`** (the local `.env`
 - Action priority distribution chart.
 - Category overview with units, risks and stock value from optional unit costs.
 - Four CSV exports: inventory, Action Center, expiry monitor, reorder planner.
+- **Point of Sale · sales** section (shown only when the account can view POS): date-range net sales after discounts, completed/pending/cancelled counts, units sold, average transaction, discounts given, per-product tax collected, payment-method split, top products by units, recent receipts, and a server-built sales CSV export gated by `pos:export`. The figures come only from completed POS transactions — sample and imported demand rows are never mixed in.
 - A **controlled seeded-dataset comparison** (3/7 stock-only flags vs 7/7 combined flags, 4 distinct products, 0 expected false alarms) kept separate from live statistics, with explicit “what this does not claim” notes.
 
 ### Business Calculator
@@ -118,6 +131,7 @@ These demo accounts are created **only when `DEV_LINKS=true`** (the local `.env`
 
 ### Settings
 - Shop name, currency, near-expiry threshold (default 3), safety buffer (default 2) and notification preferences.
+- **Point of Sale**: accepted payment methods (at least one must stay enabled), tax-inclusive pricing, “require payment confirmation” (pending → completed instead of instant completion) and the receipt footer. Changes apply to the next checkout and are saved with the rest of the settings.
 - Live preview of how threshold/buffer changes affect counts and suggested units before saving.
 - Import, export, template download, reload from storage and reset demo data with confirmation.
 - Settings persist and recalculation happens immediately after saving.
@@ -157,6 +171,9 @@ src/
     sales.ts                 Sales CSV parsing, duplicate detection and ledger merging
     csv.ts                   RFC-4180 parser/builder, import validation, export tables
     calculator.ts            Pure retail formulas behind the Business Calculator
+    barcode.ts               Barcode format/checksum rules, tenant-scoped lookup, duplicate detection
+    pos.ts                   Cart, totals, atomic checkout, pending payment, cancel, sales metrics/CSV
+    print.ts                 Browser receipt and barcode-label printing (DOM-only, excluded from the server tsconfig)
     calculatorTools.ts       Declarative registry of the 33 calculator tools
     format.ts                Number/currency/unit formatting
     *.test.ts                Vitest suites for rules, CSV, validation and calculators
@@ -174,6 +191,7 @@ src/
     DeleteProductDialog.tsx  Destructive confirmation
     inventory-badges.tsx     Stock, expiry, risk, priority and review badges
     toast.tsx                Accessible transient feedback
+    pos/                     CameraScanner (lazy zxing decoder) and ReceiptModal (browser print)
   pages/                     Overview, Inventory, Suppliers, Demand, Actions, Expiry, Reorder,
                              Reports, Calculator, Settings, Security and the auth pages
   admin/                     Admin Panel: clients, feature access, security, audit logs
@@ -183,14 +201,15 @@ src/
 server/
   index.ts                   Hono app: CSRF/origin gate, routes, static assets
   db.ts                      Idempotent schema, catalogue seeding, org state
-  routes/                    auth.ts (sessions, invitations, resets), admin.ts, state.ts
+  routes/                    auth.ts (sessions, invitations, resets), admin.ts, state.ts,
+                             pos.ts (barcode lookup/search, checkout, confirm, cancel, sales export)
   auth/                      Password hashing, session lifecycle, login rate limiting
   audit.ts                   Append-only audit log writer
 ```
 
 **One source of truth.** `StockoraContext` holds products, suppliers, the sales ledger, settings, reviews, activity and notifications. Sales history is appended by its own API endpoint rather than through the general state write, so the ledger cannot be rewritten by an unrelated save. `buildInsights()` derives expiry status, stock status, days of cover, reorder quantity, risk category and priority for every product on each state change. Pages read these derived values; no component keeps its own totals. KPI values, charts, actions, reports and CSV rows all come from the same array.
 
-**Persistence.** The workspace document is stored per organisation in D1 (`org_state`), keyed by the organisation on the authenticated session. Mutations update the UI immediately and are written to the Worker, which re-validates the payload and re-checks feature permissions before saving. Sessions are opaque random tokens in an `HttpOnly` cookie; only their SHA-256 hash is stored, and state-changing requests are rejected when they arrive from a foreign origin.
+**Persistence.** The workspace document is stored per organisation in D1 (`org_state`), keyed by the organisation on the authenticated session. Mutations update the UI immediately and are written to the Worker, which re-validates the payload and re-checks feature permissions before saving. Sessions are opaque random tokens in an `HttpOnly` cookie; only their SHA-256 hash is stored, and state-changing requests are rejected when they arrive from a foreign origin. POS transactions live in the same organisation document (`saleOrders`, `inventoryMovements`, `receiptCounter`) and are written only by `/api/pos/*`; the general state endpoint rejects those keys, and checkout saves through a compare-and-swap on `org_state.version` with a bounded retry so two tills can never both deduct the same unit.
 
 **Business logic is pure and testable.** `lib/inventory.ts` has no React or storage dependencies. The tests run against a fixed reference date so seeded expiry offsets stay deterministic.
 
@@ -226,6 +245,8 @@ Expired products always show no replenishment quantity.
 ---
 
 ## Seeded demo dataset
+
+Every seeded product carries a **valid EAN-13 barcode** so scanning can be demonstrated without hardware: R101 `8901234000014`, R102 `8901234000021`, R103 `8901234000038`, R104 `8901234000045`, R105 `8901234000052`, R106 `8901234000069`. Each also has its own tax rate (0 / 5 / 12 / 18 %), which is why checkout totals differ per product. Type a code into Scan & Sell, print a label from the product drawer, or scan a printed copy.
 
 The six demo products are anchored to the day the dataset is created/reset. “Reset demo data” re-anchors expiry dates to today so the walkthrough stays predictable.
 
@@ -296,8 +317,8 @@ Optional: `Expiry Date, Supplier Name, Unit, Unit Cost, Selling Price`.
 
 ## Acceptance tests
 
-### Automated (`npm run test`) — 156 tests, all passing
-### API acceptance suite (`npm run api:test`) — 114 checks against a running Worker
+### Automated (`npm run test`) — 204 tests, all passing
+### API acceptance suite (`npm run api:test`) — 135 checks against a running Worker
 
 `src/lib/inventory.test.ts`
 - **A — initial data:** 6 products, 3 low, 4 near expiry, 4 distinct actions, 7 risk flags, health 2/0/1/3, cover values 0.4/0.7/0.7.
@@ -338,7 +359,19 @@ Optional: `Expiry Date, Supplier Name, Unit, Unit Cost, Selling Price`.
 - **Windows and trend:** 7-day window compares with the preceding 7 days; unsupported windows fall back to 30; future-dated sales are ignored.
 - **Safety:** expired stock is never recommended for sale (no “markdown”/“discount” wording), gets no stockout advice, and analysis never mutates the product.
 
-**API suite coverage** includes the earlier admin/client separation, tenant isolation, live feature and per-action revocation, suspension, password policy, reset flows, audit logging and CSV checks, plus the new supplier and sales-history block: supplier create/read, invalid email and duplicate rejection, supplier writes blocked when the feature is disabled, sales import with tracking start, duplicate-safe re-import, demo provenance, unknown SKU and future-date rejection, immutable ledger through `/api/state`, and sales import blocked when Demand Analytics is disabled. Probe products and suppliers are restored afterwards.
+`src/lib/barcode.test.ts`
+- Format rules: trimmed scanner input, 4–64 characters, safe character set, optional field, and retail check digits treated as a hint (a valid EAN-13 passes, an internal code with a bad checksum is still accepted).
+- Lookup: known barcode → correct product, alternative barcode → same product, unknown barcode → nothing invented, and a second shop's list never resolves another tenant's code.
+- Duplicate assignment is rejected with the owning product named; editing a product keeps its own barcode valid; alternative barcodes that collide with another product or repeat the primary one are rejected; malformed codes fail.
+
+`src/lib/pos.test.ts`
+- Cart: multiple products, repeated scans incrementing one line, quantity edits, removal, whole-unit vs fractional rules, and stock unchanged by scanning alone.
+- Totals: exclusive tax added, inclusive tax extracted without changing the amount paid, item-then-order discounts, and totals always equal to the sum of their lines.
+- Checkout: stock deducted exactly once, ledger line with `source: 'pos'` and `saleId`, movement with previous/resulting stock, receipt `RCPT-000001`, change due, activity entry; replayed idempotency key returns the same order and moves no stock; insufficient stock, expired, inactive, missing price, short cash, disallowed payment method and discount-denied are all rejected without touching state; sequential sales cannot oversell the last unit.
+- Payment states: pending checkout deducts nothing, confirmation deducts once and a second confirmation is a no-op, cancellation leaves stock untouched, a pending order cannot be confirmed after another till sold the stock, and completed sales cannot be cancelled.
+- Integration: POS lines feed `analyzeDemand` (units, transactions, velocity), reorder quantities rise by the units sold, `salesMetrics` counts completed transactions only and respects the date range, and the CSV table exports receipt rows.
+
+**API suite coverage** includes the earlier admin/client separation, tenant isolation, live feature and per-action revocation, suspension, password policy, reset flows, audit logging and CSV checks, plus the new supplier and sales-history block: supplier create/read, invalid email and duplicate rejection, supplier writes blocked when the feature is disabled, sales import with tracking start, duplicate-safe re-import, demo provenance, unknown SKU and future-date rejection, immutable ledger through `/api/state`, and sales import blocked when Demand Analytics is disabled. Probe products and suppliers are restored afterwards. The POS block adds: unauthenticated barcode lookup rejected, seeded barcode resolving to R101 with a server price, unknown barcode → 404 with no invented product, saving a product with a barcode, duplicate barcode rejected with the owning product named, new barcode immediately scannable, checkout completing with a receipt number, stock deducted exactly once, ledger line and inventory movement linked to the sale, replay returning the same transaction without a second deduction, oversell rejected with 409 `insufficient_stock`, a client-supplied price ignored, the state endpoint refusing `saleOrders` writes, lookup and checkout blocked when the `pos` feature is disabled, a platform administrator receiving 403, and the probe product removed afterwards.
 
 ### Browser verification performed during development
 
@@ -360,6 +393,8 @@ No claim is made that this app has been deployed to or measured in a live retail
 5. **2:00–2:30 — Live update.** Edit Rice stock 25 → 6. It becomes low stock (P2), KPIs and the health chart update instantly. Restore 25 or reset afterwards.
 6. **2:30–3:00 — Impact.** In Reports, show the controlled comparison: stock-only detection found 3/7 flags, combined detection 7/7 across 4 products, 0 expected false alarms. Resize to mobile for the card layout and bottom navigation.
 
+**POS (2 extra minutes).** Open **Scan & Sell**, click the barcode field and type `8901234000014` (or scan a printed copy) → Milk 1L appears with stock 8 and price 70; scan again to show the quantity becoming 2 on one line, not two. Add a second product (bread `8901234000038`) to show per-product tax. Press *Complete sale* with cash 500 → change due is shown, the receipt opens with `RCPT-…`, and the header stock badge drops by the sold quantity. Now open **Inventory**: Milk is at 6 and the movement history/ledger shows the sale. Open **Overview** and **Demand Analytics** to show the same sale counted there, and **Reports → Point of Sale · sales** for the day's net sales. Scan a made-up code (`1234567890123`-style) to show the “Product not found” state that offers to search or assign the barcode instead of inventing a product.
+
 **Optional extra, if the account's plan includes it:** open the Business Calculator and load Juice into the expiry tool. Its stock, cost and real days-until-expiry are pulled from inventory and the at-risk cost is recomputed live — the same rules you just saw, expressed as arithmetic.
 
 **Suppliers and demand (2 extra minutes).** Open **Suppliers** → FreshPastures Dairy to show contact details, lead time and the linked Milk product. Then open **Demand Analytics**, pick a 30-day window and show that Milk and Bread are best sellers from recorded transactions while a newly added product without sales is labelled “Not enough history” — not zero demand. Click any row for the reasons behind the classification. Use *Load sample history* if the shop has no sales yet; the banner makes clear those rows are demo data.
@@ -379,7 +414,12 @@ Reset between demos with **Settings → Reset demo data** (or the profile menu).
 
 ## Honest limitations
 
-- No POS, accounting or supplier-system integration is connected. Inventory is entered by hand or imported from CSV, and demand requires a sales export/transcription — there is no live sales feed, and Stockora never invents transactions to fill the gap.
+- **POS payments are recorded, not processed.** No payment gateway, card terminal or UPI integration exists, so the method chosen at checkout is a cashier confirmation. Card numbers, CVVs and PINs are never requested, stored or logged.
+- **No refunds or returns.** A completed sale cannot be cancelled through the UI or API. Reversing a sale requires a separate return transaction that restocks only resellable goods, which is not implemented — so the sales ledger is append-only.
+- **No offline selling.** Stockora is an online web app: a lost connection shows a retryable error and blocks the sale rather than queueing it locally. A reliable offline queue with unique IDs, secure storage and server-side conflict resolution is documented future work, not a shipped feature.
+- **No batch/lot tracking.** Expiry is recorded per product, so a sale deducts from that product's single stock figure and refuses expired products outright; FEFO across several batches with different expiry dates is not modelled.
+- **Camera scanning needs a secure context** (HTTPS or localhost) and a supporting browser; permission denial and unsupported devices are handled with a message and manual entry stays available. USB/Bluetooth keyboard-wedge scanners need no driver, and no proprietary scanner SDK or electronic cash register is integrated.
+- No accounting or supplier-system integration is connected, and no purchase order is created or sent automatically. Demand analytics now receive POS sales, but a shop that only transcribes sales by CSV still has no live feed, and Stockora never invents transactions to fill the gap.
 - Demand labels describe recorded transactions only. A shop that has not recorded sales sees “not enough history”, not a demand verdict; recommendations are advisory and never change stock, prices or purchase orders.
 - Email delivery is not configured. Invitation and password-reset links rely on the development link exposed when `DEV_LINKS=true`; production needs an email provider. Until then the supported recovery path is an administrator setting the password from the client page.
 - Email verification and multi-factor authentication are not implemented; there is no self-service registration, so accounts exist only through an administrator invitation or deployment-time seeding.
@@ -388,7 +428,7 @@ Reset between demos with **Settings → Reset demo data** (or the profile menu).
 - Reorder quantities are suggestions based only on demand, lead time and the configured buffer; supplier constraints, shelf life and promotions are not modelled.
 - Stock value is an estimate from optional unit costs; missing costs reduce the reported total.
 - The demo impact comparison is a controlled six-product acceptance test, not evidence of real-world waste or revenue outcomes. No such claims are made.
-- The bundle currently ships Recharts in the main chunk (Vite reports a >500 kB chunk warning); this does not affect functionality.
+- The camera scanning library is lazy-loaded, but Recharts still ships in the main chunk (Vite reports a >500 kB chunk warning); this does not affect functionality.
 - The Business Calculator is rule-based arithmetic on numbers you enter or data you have recorded. Its growth and forecast tools are not a trained model, and no market, supplier or benchmark feed is connected.
 - Currency conversion is deliberately not offered: no exchange-rate source is configured, so no rate is displayed or estimated.
 - GST tools use the rate you type. Rates differ by product, and nothing in the calculator is tax advice.

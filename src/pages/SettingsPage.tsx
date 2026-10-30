@@ -7,11 +7,13 @@ import {
   RefreshCw,
   RotateCcw,
   Save,
+  ScanBarcode,
   Store,
   Upload,
   Wallet,
 } from 'lucide-react';
-import type { CurrencyCode, Settings } from '../types';
+import type { CurrencyCode, PaymentMethod, Settings } from '../types';
+import { PAYMENT_METHOD_LABELS } from '../types';
 import { useStockora } from '../store/StockoraContext';
 import { PageHeader } from '../components/PageHeader';
 import {
@@ -57,7 +59,12 @@ export default function SettingsPage() {
   const canImport = useAction('csv_import', 'create');
   const canExport = useAction('csv_export', 'export');
   const [draft, setDraft] = useState<Settings>(settings);
-  const [errors, setErrors] = useState<{ shopName?: string; expiryThreshold?: string; safetyBufferDays?: string }>({});
+  const [errors, setErrors] = useState<{
+    shopName?: string;
+    expiryThreshold?: string;
+    safetyBufferDays?: string;
+    posPaymentMethods?: string;
+  }>({});
   const [resetOpen, setResetOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
 
@@ -70,7 +77,8 @@ export default function SettingsPage() {
     draft.expiryThreshold !== settings.expiryThreshold ||
     draft.safetyBufferDays !== settings.safetyBufferDays ||
     draft.currency !== settings.currency ||
-    JSON.stringify(draft.notifications) !== JSON.stringify(settings.notifications);
+    JSON.stringify(draft.notifications) !== JSON.stringify(settings.notifications) ||
+    JSON.stringify(draft.pos) !== JSON.stringify(settings.pos);
 
   const preview = useMemo(() => {
     const threshold = Number.isFinite(draft.expiryThreshold) ? draft.expiryThreshold : settings.expiryThreshold;
@@ -96,6 +104,9 @@ export default function SettingsPage() {
     if (!Number.isInteger(draft.safetyBufferDays) || draft.safetyBufferDays < 0 || draft.safetyBufferDays > 30) {
       nextErrors.safetyBufferDays = 'Use a whole number from 0 to 30 days.';
     }
+    if (draft.pos.paymentMethods.length === 0) {
+      nextErrors.posPaymentMethods = 'Keep at least one payment method enabled at the till.';
+    }
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) {
       toast.error('Settings not saved', 'Check the highlighted fields and try again.');
@@ -116,6 +127,19 @@ export default function SettingsPage() {
       ...current,
       notifications: { ...current.notifications, [key]: !current.notifications[key] },
     }));
+  };
+
+  const togglePaymentMethod = (method: PaymentMethod) => {
+    setDraft((current) => {
+      const has = current.pos.paymentMethods.includes(method);
+      const paymentMethods = has
+        ? current.pos.paymentMethods.filter((entry) => entry !== method)
+        : [...current.pos.paymentMethods, method];
+      return { ...current, pos: { ...current.pos, paymentMethods } };
+    });
+    if (errors.posPaymentMethods) {
+      setErrors((current) => ({ ...current, posPaymentMethods: undefined }));
+    }
   };
 
   return (
@@ -262,6 +286,115 @@ export default function SettingsPage() {
                 Preview uses the values above. Figures update after you save.
               </p>
             </div>
+          </SectionCard>
+
+          <SectionCard
+            title="Point of Sale"
+            description="Payment options, tax display and the receipt footer for Scan & Sell."
+            icon={<ScanBarcode className="h-4 w-4" aria-hidden="true" />}
+          >
+            <fieldset>
+              <legend className="text-xs font-semibold text-ink">Accepted payment methods</legend>
+              <div className="mt-1.5 grid grid-cols-2 gap-2">
+                {(Object.keys(PAYMENT_METHOD_LABELS) as PaymentMethod[]).map((method) => (
+                  <label
+                    key={method}
+                    className={cn(
+                      'flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors',
+                      draft.pos.paymentMethods.includes(method)
+                        ? 'border-primary/30 bg-primary-soft/30'
+                        : 'border-line bg-white',
+                    )}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={draft.pos.paymentMethods.includes(method)}
+                      onChange={() => togglePaymentMethod(method)}
+                      className="h-4 w-4 rounded border-muted/50 text-primary focus:ring-primary"
+                    />
+                    <span className="font-medium text-ink">{PAYMENT_METHOD_LABELS[method]}</span>
+                  </label>
+                ))}
+              </div>
+              {errors.posPaymentMethods ? (
+                <p role="alert" className="mt-1.5 text-xs font-medium text-crit">
+                  {errors.posPaymentMethods}
+                </p>
+              ) : (
+                <p className="mt-1.5 text-[11px] text-muted">
+                  The cashier picks one of these at checkout. No payment gateway is connected — every method is a
+                  cashier-confirmed record.
+                </p>
+              )}
+            </fieldset>
+
+            <div className="mt-3 space-y-2">
+              <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-line px-3 py-2.5 text-sm">
+                <input
+                  type="checkbox"
+                  checked={draft.pos.taxInclusive}
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      pos: { ...current.pos, taxInclusive: event.target.checked },
+                    }))
+                  }
+                  className="mt-0.5 h-4 w-4 rounded border-muted/50 text-primary focus:ring-primary"
+                />
+                <span>
+                  <span className="block font-medium text-ink">Selling prices include tax</span>
+                  <span className="block text-[11px] text-muted">
+                    Off: each product&apos;s tax rate is added at checkout. On: tax is extracted from the price you
+                    already charge.
+                  </span>
+                </span>
+              </label>
+              <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-line px-3 py-2.5 text-sm">
+                <input
+                  type="checkbox"
+                  checked={draft.pos.requirePaymentConfirmation}
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      pos: { ...current.pos, requirePaymentConfirmation: event.target.checked },
+                    }))
+                  }
+                  className="mt-0.5 h-4 w-4 rounded border-muted/50 text-primary focus:ring-primary"
+                />
+                <span>
+                  <span className="block font-medium text-ink">Require payment confirmation before completing</span>
+                  <span className="block text-[11px] text-muted">
+                    On: a sale is saved as pending and stock is deducted only when the cashier confirms payment. Off:
+                    checkout completes the sale immediately.
+                  </span>
+                </span>
+              </label>
+            </div>
+
+            <div className="mt-3">
+              <Field
+                label="Receipt footer"
+                htmlFor="settings-pos-footer"
+                hint="Printed on every receipt, e.g. GSTIN, address or return policy."
+              >
+                <TextInput
+                  id="settings-pos-footer"
+                  value={draft.pos.receiptFooter}
+                  maxLength={240}
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      pos: { ...current.pos, receiptFooter: event.target.value },
+                    }))
+                  }
+                />
+              </Field>
+            </div>
+
+            <InfoNote tone="info" icon={<Info className="h-4 w-4" aria-hidden="true" />}>
+              Checkout always re-reads prices and stock on the server. Scanning never changes inventory, and stock is
+              deducted exactly once when a sale completes. Expired or switched-off products cannot be sold.
+            </InfoNote>
           </SectionCard>
 
           <SectionCard

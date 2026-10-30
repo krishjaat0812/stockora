@@ -4,6 +4,7 @@ import { formatCover } from './inventory';
 import { isValidDateString } from './inventory';
 import { parseISODate, toISODate } from './date';
 import { validateProductInput } from './validation';
+import { barcodeFormatError, normalizeBarcode } from './barcode';
 
 export interface CsvTable {
   headers: string[];
@@ -144,6 +145,12 @@ const HEADER_ALIASES: Record<string, string> = {
   saleprice: 'sellingprice',
   retailprice: 'sellingprice',
   mrp: 'sellingprice',
+  barcode: 'barcode',
+  barcodes: 'barcode',
+  ean: 'barcode',
+  ean13: 'barcode',
+  upc: 'barcode',
+  gtin: 'barcode',
 };
 
 function normalizeHeader(header: string): string {
@@ -165,6 +172,7 @@ function parseCsvDate(raw: string): string | null {
 export const SAMPLE_CSV: CsvTable = {
   headers: [
     'SKU',
+    'Barcode',
     'Product Name',
     'Category',
     'Current Stock',
@@ -178,9 +186,9 @@ export const SAMPLE_CSV: CsvTable = {
     'Selling Price',
   ],
   rows: [
-    ['R201', 'Butter 250g', 'Dairy & Chilled', 12, 6, 3, 2, toISODate(new Date(Date.now() + 14 * 86_400_000)), 'FreshPastures Dairy', 'pack', 58, 70],
-    ['R202', 'Coffee 100g', 'Beverages', 9, 4, 1.5, 5, '', 'Highland Roasters', 'pack', 240, 299],
-    ['R203', 'Tomato Ketchup 500g', 'Condiments', 3, 8, 2, 4, toISODate(new Date(Date.now() + 200 * 86_400_000)), 'SunHarvest Foods', 'bottle', 110, 135],
+    ['R201', '8901234000076', 'Butter 250g', 'Dairy & Chilled', 12, 6, 3, 2, toISODate(new Date(Date.now() + 14 * 86_400_000)), 'FreshPastures Dairy', 'pack', 58, 70],
+    ['R202', '8901234000083', 'Coffee 100g', 'Beverages', 9, 4, 1.5, 5, '', 'Highland Roasters', 'pack', 240, 299],
+    ['R203', '8901234000090', 'Tomato Ketchup 500g', 'Condiments', 3, 8, 2, 4, toISODate(new Date(Date.now() + 200 * 86_400_000)), 'SunHarvest Foods', 'bottle', 110, 135],
   ],
 };
 
@@ -223,6 +231,7 @@ export function parseInventoryCsv(
   }
 
   const seenSkus = new Map<string, number>();
+  const seenBarcodes = new Map<string, number>();
   const existing = new Map(products.map((product) => [product.sku.trim().toLowerCase(), product]));
 
   dataRows.forEach((cells, index) => {
@@ -281,6 +290,14 @@ export function parseInventoryCsv(
       } else sellingPrice = value;
     }
 
+    const rawBarcode = get('barcode');
+    let barcode: string | null = null;
+    if (rawBarcode) {
+      barcode = normalizeBarcode(rawBarcode);
+      const formatError = barcodeFormatError(barcode);
+      if (formatError) errors.push(formatError);
+    }
+
     const input: ProductInput = {
       sku: rawSku,
       name: get('name'),
@@ -294,11 +311,24 @@ export function parseInventoryCsv(
       unit: get('unit') || undefined,
       unitCost,
       sellingPrice,
+      barcode,
+      altBarcodes: [],
+      taxRatePct: null,
+      active: true,
+      allowFractional: false,
     };
 
     const normalizedSku = rawSku.toLowerCase();
     if (normalizedSku && seenSkus.has(normalizedSku)) {
       errors.push(`SKU "${rawSku}" appears more than once in this file (also row ${seenSkus.get(normalizedSku)}).`);
+    }
+
+    // Barcodes must be unique inside the file as well as in existing inventory.
+    if (barcode) {
+      const clashRow = seenBarcodes.get(barcode.toLowerCase());
+      if (clashRow !== undefined) {
+        errors.push(`Barcode "${barcode}" appears more than once in this file (also row ${clashRow}).`);
+      }
     }
 
     const existingProduct = normalizedSku ? existing.get(normalizedSku) : undefined;
@@ -327,6 +357,7 @@ export function parseInventoryCsv(
     }
 
     seenSkus.set(normalizedSku, rowNumber);
+    if (barcode) seenBarcodes.set(barcode.toLowerCase(), rowNumber);
     summary.valid.push({ ...input, sku: input.sku.trim().toUpperCase(), name: input.name.trim(), category: input.category.trim() });
     if (isUpdate) summary.updatedCount += 1;
   });
@@ -342,6 +373,7 @@ export function inventoryTable(products: Product[]): CsvTable {
   return {
     headers: [
       'SKU',
+      'Barcode',
       'Product Name',
       'Category',
       'Current Stock',
@@ -356,6 +388,7 @@ export function inventoryTable(products: Product[]): CsvTable {
     ],
     rows: products.map((product) => [
       product.sku,
+      normalizeBarcode(product.barcode),
       product.name,
       product.category,
       product.currentStock,

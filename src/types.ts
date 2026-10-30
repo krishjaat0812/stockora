@@ -17,11 +17,21 @@ export interface Product {
   unit?: string;
   unitCost?: number | null;
   /**
-   * Optional selling price per unit. Used only for margin and stock-value
-   * estimates in the Business Calculator and Reports; stock decisions never
-   * depend on it.
+   * Optional selling price per unit. Used for margin and stock-value estimates
+   * in the Business Calculator and Reports, and as the authoritative price at
+   * the POS; stock decisions never depend on it.
    */
   sellingPrice?: number | null;
+  /** Primary barcode (EAN/UPC/Code128 style). Unique within the shop. */
+  barcode?: string | null;
+  /** Alternative barcodes that also resolve to this product at the POS. */
+  altBarcodes?: string[];
+  /** Tax rate in percent applied at checkout (e.g. GST). null/0 = untaxed. */
+  taxRatePct?: number | null;
+  /** true when the product is sold by weight/measure and may be sold in decimal quantities. */
+  allowFractional?: boolean;
+  /** false = kept for history and reporting but not sellable at the POS. */
+  active?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -42,6 +52,22 @@ export interface Settings {
   safetyBufferDays: number;
   currency: CurrencyCode;
   notifications: NotificationPreferences;
+  pos: PosSettings;
+}
+
+/** Shop-level Point of Sale configuration. */
+export interface PosSettings {
+  /** Payment methods the cashier may select at checkout. */
+  paymentMethods: PaymentMethod[];
+  /** When true, product selling prices are treated as tax-inclusive. */
+  taxInclusive: boolean;
+  /**
+   * When true, a sale stays in "pending payment" until the cashier confirms
+   * the money was received; stock is deducted only at that confirmation.
+   */
+  requirePaymentConfirmation: boolean;
+  /** Footer printed on receipts (e.g. GSTIN, address, thank-you note). */
+  receiptFooter: string;
 }
 
 export type ExpiryStatus = 'expired' | 'today' | 'near' | 'ok' | 'missing';
@@ -87,6 +113,7 @@ export interface ActivityEntry {
     | 'supplier-deleted'
     | 'sales-imported'
     | 'sales-cleared'
+    | 'sale'
     | 'import'
     | 'reviewed'
     | 'settings'
@@ -152,9 +179,105 @@ export interface SaleRecord {
   unitPrice: number | null;
   /** Calendar date of the sale (yyyy-mm-dd). */
   soldAt: string;
-  /** Provenance: imported from a POS export, entered manually, or sample data. */
-  source: 'import' | 'manual' | 'demo';
+  /**
+   * Provenance: recorded at the POS, imported from a POS export, entered
+   * manually, or sample data. POS lines carry the order they belong to.
+   */
+  source: 'pos' | 'import' | 'manual' | 'demo';
+  /** The completed POS order this line belongs to (POS sales only). */
+  saleId?: string;
   createdAt: string;
+}
+
+export type PaymentMethod = 'cash' | 'upi' | 'card' | 'other';
+
+export const PAYMENT_METHOD_LABELS: Record<PaymentMethod, string> = {
+  cash: 'Cash',
+  upi: 'UPI',
+  card: 'Card',
+  other: 'Other',
+};
+
+/**
+ * POS transaction states. A cart exists only in the browser (a draft that is
+ * never persisted); a saved order is either waiting for payment confirmation,
+ * completed (stock deducted exactly once) or cancelled before completion
+ * (stock untouched). Refunds are intentionally not implemented.
+ */
+export type SaleStatus = 'pending_payment' | 'completed' | 'cancelled';
+
+/** One line of a completed or pending POS transaction, priced at sale time. */
+export interface SaleLine {
+  productId: string;
+  sku: string;
+  /** Product name at the time of sale. */
+  name: string;
+  quantity: number;
+  /** Authoritative unit price taken from the product record at sale time. */
+  unitPrice: number;
+  taxRatePct: number;
+  lineDiscountPct: number;
+  lineDiscountAmount: number;
+  /** Share of the order-level discount allocated to this line. */
+  orderDiscountShare: number;
+  taxAmount: number;
+  /** What this line contributes to the amount payable. */
+  lineTotal: number;
+  /** Taxable base after discounts (net of tax when prices are tax-inclusive). */
+  taxableBase: number;
+}
+
+export interface SaleOrder {
+  id: string;
+  /** Sequential receipt number, e.g. RCPT-000123. */
+  receiptNumber: string;
+  /** Client-supplied key; a retry with the same key returns this order. */
+  idempotencyKey: string;
+  status: SaleStatus;
+  createdAt: string;
+  completedAt: string | null;
+  cancelledAt: string | null;
+  /** Calendar date the sale completed (yyyy-mm-dd); null until completed. */
+  soldAt: string | null;
+  lines: SaleLine[];
+  subtotal: number;
+  lineDiscountTotal: number;
+  orderDiscountPct: number;
+  orderDiscountTotal: number;
+  taxTotal: number;
+  taxableAmount: number;
+  /** Amount payable (tax-inclusive when the shop prices tax-inclusively). */
+  total: number;
+  taxInclusive: boolean;
+  currency: CurrencyCode;
+  paymentMethod: PaymentMethod;
+  amountReceived: number | null;
+  changeDue: number | null;
+  paidAt: string | null;
+  cashierId: string;
+  cashierName: string;
+  note?: string;
+  /** Non-blocking advisories shown at checkout (e.g. near-expiry warning). */
+  warnings?: string[];
+}
+
+/**
+ * Stock ledger entry. Every completed POS sale records one movement per line
+ * so stock changes remain traceable instead of being overwritten silently.
+ */
+export interface InventoryMovement {
+  id: string;
+  productId: string;
+  sku: string;
+  type: 'sale';
+  /** Negative for a sale deduction. */
+  quantityChange: number;
+  previousStock: number;
+  resultingStock: number;
+  saleId: string;
+  at: string;
+  actorId: string;
+  actorName: string;
 }
 
 export interface PersistedState {
@@ -170,6 +293,12 @@ export interface PersistedState {
   reviews: ReviewRecord[];
   /** Alert keys already raised, so unchanged conditions are not re-notified. */
   notifiedKeys: string[];
+  /** POS transactions, newest last. Server-written; never accepted from the client. */
+  saleOrders: SaleOrder[];
+  /** Stock movement ledger for completed sales. Server-written only. */
+  inventoryMovements: InventoryMovement[];
+  /** Monotonic receipt sequence (RCPT-000123). Server-written only. */
+  receiptCounter: number;
   seededOn: string;
 }
 

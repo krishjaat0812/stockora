@@ -9,3 +9,5 @@ coverage/
 /freebuff-sites-build/
 .wrangler/
 /stockora-transfer-*.tar.gz
+.dev.vars
+.sites-build/

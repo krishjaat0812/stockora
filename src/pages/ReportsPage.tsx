@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   AlertTriangle,
@@ -9,12 +9,13 @@ import {
   Download,
   Info,
   Layers,
+  Receipt,
   ShieldCheck,
 } from 'lucide-react';
 import { Bar, BarChart, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { useStockora } from '../store/StockoraContext';
 import { PageHeader } from '../components/PageHeader';
-import { Badge, Button, Card, InfoNote, SectionCard, cn } from '../components/ui';
+import { Badge, Button, Card, InfoNote, SectionCard, TextInput, cn } from '../components/ui';
 import { useToast } from '../components/toast';
 import {
   DEMO_ACCEPTANCE,
@@ -30,9 +31,11 @@ import {
   inventoryTable,
   reorderTable,
 } from '../lib/csv';
-import { ExportDeniedError, exportCsv } from '../lib/download';
+import { ExportDeniedError, exportCsv, exportSalesCsv } from '../lib/download';
+import { salesMetrics } from '../lib/pos';
 import { useAction } from '../auth/AuthContext';
 import { formatCurrency, formatNumber } from '../lib/format';
+import { PAYMENT_METHOD_LABELS } from '../types';
 
 export default function ReportsPage() {
   const {
@@ -42,9 +45,49 @@ export default function ReportsPage() {
     metrics,
     actionQueue,
     reviewedKeys,
+    saleOrders,
   } = useStockora();
   const toast = useToast();
   const canExport = useAction('csv_export', 'export');
+  const canViewPos = useAction('pos', 'view');
+  const canExportPos = useAction('pos', 'export');
+  const [range, setRange] = useState(() => {
+    const to = new Date().toISOString().slice(0, 10);
+    const from = new Date(Date.now() - 29 * 86_400_000).toISOString().slice(0, 10);
+    return { from, to };
+  });
+  const sales = useMemo(() => salesMetrics(saleOrders, range), [saleOrders, range]);
+  const recentSales = useMemo(
+    () =>
+      saleOrders
+        .filter(
+          (order) =>
+            order.status === 'completed' &&
+            order.soldAt !== null &&
+            order.soldAt >= range.from &&
+            order.soldAt <= range.to,
+        )
+        .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
+        .slice(0, 8),
+    [saleOrders, range],
+  );
+
+  const exportSales = async () => {
+    try {
+      await exportSalesCsv(
+        range.from,
+        range.to,
+        `stockora-sales-${range.from}-to-${range.to}.csv`,
+      );
+    } catch (err) {
+      toast.error(
+        'Export not allowed',
+        err instanceof ExportDeniedError ? err.message : 'Sales export failed. Try again.',
+      );
+      return;
+    }
+    toast.success('Sales exported', `${sales.completedCount} completed transaction(s) downloaded as CSV.`);
+  };
 
   const runExport = async (
     view: 'inventory' | 'actions' | 'expiry' | 'reorder',
@@ -318,6 +361,159 @@ export default function ReportsPage() {
           </p>
         ) : null}
       </SectionCard>
+
+      {canViewPos ? (
+        <SectionCard
+          title="Point of Sale · sales"
+          description="Completed Scan & Sell transactions only. Sample or imported demand history is never mixed into these financial figures."
+          icon={<Receipt className="h-4 w-4" aria-hidden="true" />}
+          action={
+            <div className="flex flex-wrap items-end gap-2">
+              <label className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                From
+                <TextInput
+                  type="date"
+                  value={range.from}
+                  max={range.to}
+                  onChange={(event) => setRange((current) => ({ ...current, from: event.target.value }))}
+                  className="mt-1 h-9 w-[140px]"
+                  aria-label="Sales report start date"
+                />
+              </label>
+              <label className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                To
+                <TextInput
+                  type="date"
+                  value={range.to}
+                  min={range.from}
+                  onChange={(event) => setRange((current) => ({ ...current, to: event.target.value }))}
+                  className="mt-1 h-9 w-[140px]"
+                  aria-label="Sales report end date"
+                />
+              </label>
+              {canExportPos ? (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  icon={<Download className="h-3.5 w-3.5" aria-hidden="true" />}
+                  onClick={() => void exportSales()}
+                >
+                  Export sales
+                </Button>
+              ) : null}
+            </div>
+          }
+        >
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+            {[
+              { label: 'Net sales (paid)', value: formatCurrency(sales.netSales, settings.currency), hint: 'After discounts; tax included' },
+              { label: 'Completed sales', value: formatNumber(sales.completedCount), hint: `${sales.pendingCount} pending · ${sales.cancelledCount} cancelled` },
+              { label: 'Units sold', value: formatNumber(sales.unitsSold, sales.unitsSold % 1 === 0 ? 0 : 2), hint: 'Across completed sales' },
+              { label: 'Avg transaction', value: formatCurrency(sales.averageTransaction, settings.currency), hint: 'Net sales ÷ completed sales' },
+              { label: 'Discounts given', value: formatCurrency(sales.discounts, settings.currency), hint: 'Item + order discounts' },
+              { label: 'Tax collected', value: formatCurrency(sales.taxCollected, settings.currency), hint: 'Per-product rates' },
+            ].map((item) => (
+              <div key={item.label} className="rounded-xl border border-line bg-canvas/50 p-3">
+                <p className="text-[10px] font-semibold uppercase leading-4 tracking-wide text-muted">{item.label}</p>
+                <p className="tnum mt-1 text-xl font-bold text-ink">{item.value}</p>
+                <p className="mt-0.5 text-[10px] leading-4 text-muted">{item.hint}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-3 grid gap-3 lg:grid-cols-2">
+            <div className="rounded-xl border border-line p-3.5">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">Payment methods</h3>
+              {sales.byPayment.length === 0 ? (
+                <p className="mt-2 text-xs text-muted">No completed sales in this range.</p>
+              ) : (
+                <ul className="mt-2 space-y-1.5">
+                  {sales.byPayment.map((entry) => (
+                    <li key={entry.method} className="flex items-center justify-between gap-3 text-sm">
+                      <span className="text-ink">
+                        {PAYMENT_METHOD_LABELS[entry.method] ?? entry.method}
+                        <span className="ml-1.5 text-[11px] text-muted">
+                          {entry.count} sale{entry.count === 1 ? '' : 's'}
+                        </span>
+                      </span>
+                      <span className="tnum font-semibold text-ink">
+                        {formatCurrency(entry.total, settings.currency)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div className="rounded-xl border border-line p-3.5">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">Top products by units</h3>
+              {sales.topProducts.length === 0 ? (
+                <p className="mt-2 text-xs text-muted">No completed sales in this range.</p>
+              ) : (
+                <ul className="mt-2 space-y-1.5">
+                  {sales.topProducts.slice(0, 5).map((product) => (
+                    <li key={product.productId} className="flex items-center justify-between gap-3 text-sm">
+                      <span className="min-w-0 truncate text-ink">
+                        {product.name}
+                        <span className="tnum ml-1.5 text-[11px] text-muted">{product.sku}</span>
+                      </span>
+                      <span className="tnum shrink-0 font-semibold text-ink">
+                        {formatNumber(product.units, product.units % 1 === 0 ? 0 : 2)} u ·{' '}
+                        {formatCurrency(product.revenue, settings.currency)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+
+          <div className="mt-3 overflow-x-auto rounded-xl border border-line">
+            <table className="w-full min-w-[640px] border-collapse text-left">
+              <caption className="sr-only">Recent completed Point of Sale transactions</caption>
+              <thead className="table-head">
+                <tr>
+                  <th scope="col" className="px-3 py-2">Receipt</th>
+                  <th scope="col" className="px-3 py-2">Date</th>
+                  <th scope="col" className="px-3 py-2">Cashier</th>
+                  <th scope="col" className="px-3 py-2">Payment</th>
+                  <th scope="col" className="px-3 py-2 text-right">Items</th>
+                  <th scope="col" className="px-3 py-2 text-right">Total</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-line">
+                {recentSales.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-3 py-5 text-center text-xs text-muted">
+                      No completed sales in this date range. Record a sale in Scan &amp; Sell to see it here.
+                    </td>
+                  </tr>
+                ) : (
+                  recentSales.map((order) => (
+                    <tr key={order.id}>
+                      <td className="tnum px-3 py-2 text-xs font-semibold text-ink">{order.receiptNumber}</td>
+                      <td className="px-3 py-2 text-xs text-muted">{order.soldAt}</td>
+                      <td className="px-3 py-2 text-xs text-muted">{order.cashierName}</td>
+                      <td className="px-3 py-2 text-xs text-muted">
+                        {PAYMENT_METHOD_LABELS[order.paymentMethod] ?? order.paymentMethod}
+                      </td>
+                      <td className="tnum px-3 py-2 text-right text-xs text-muted">{order.lines.length}</td>
+                      <td className="tnum px-3 py-2 text-right text-xs font-semibold text-ink">
+                        {formatCurrency(order.total, order.currency ?? settings.currency)}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <InfoNote tone="info" icon={<Info className="h-4 w-4" aria-hidden="true" />}>
+            Net sales is the amount customers paid after discounts (including tax where prices are tax-inclusive).
+            Requests for refunds are not implemented, so no refunded figures exist. Sample and imported demand rows
+            in Demand Analytics are never counted here.
+          </InfoNote>
+        </SectionCard>
+      ) : null}
 
       <SectionCard
         title="Controlled demo impact"

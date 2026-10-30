@@ -34,6 +34,7 @@ import { ProductDetailDrawer } from '../components/ProductDetailDrawer';
 import { DeleteProductDialog } from '../components/DeleteProductDialog';
 import { useToast } from '../components/toast';
 import { formatCover, reorderFormula } from '../lib/inventory';
+import { productBarcodes } from '../lib/barcode';
 import { fileStamp, inventoryTable } from '../lib/csv';
 import { ExportDeniedError, exportCsv } from '../lib/download';
 import { useAction } from '../auth/AuthContext';
@@ -203,7 +204,8 @@ export default function InventoryPage() {
       if (!needle) return true;
       return (
         insight.product.name.toLowerCase().includes(needle) ||
-        insight.product.sku.toLowerCase().includes(needle)
+        insight.product.sku.toLowerCase().includes(needle) ||
+        productBarcodes(insight.product).some((code) => code.toLowerCase().includes(needle))
       );
     });
   }, [insights, q, status, category]);
@@ -294,7 +296,7 @@ export default function InventoryPage() {
                 id="inventory-search"
                 value={q}
                 onChange={(event) => updateParams({ q: event.target.value })}
-                placeholder="Product name or SKU"
+                placeholder="Name, SKU or barcode"
                 className="pl-9"
               />
             </div>
@@ -438,7 +440,14 @@ export default function InventoryPage() {
                     const breakdown = reorderFormula(product, settings.safetyBufferDays);
                     return (
                       <tr key={product.id} className="transition-colors hover:bg-primary-soft/30">
-                        <td className="table-cell tnum whitespace-nowrap font-medium text-muted">{product.sku}</td>
+                        <td className="table-cell tnum whitespace-nowrap font-medium text-muted">
+                          {product.sku}
+                          {product.barcode ? (
+                            <p className="text-[10px] font-normal text-muted/80" title="Barcode">
+                              {product.barcode}
+                            </p>
+                          ) : null}
+                        </td>
                         <td className="table-cell">
                           <button
                             type="button"
@@ -538,6 +547,7 @@ export default function InventoryPage() {
                       <p className="truncate text-sm font-semibold text-ink">{product.name}</p>
                       <p className="tnum text-[11px] text-muted">
                         {product.sku} · {product.category}
+                        {product.barcode ? ` · ${product.barcode}` : ''}
                       </p>
                     </button>
                     {insight.reorderQuantity > 0 ? (
