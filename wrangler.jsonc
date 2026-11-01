@@ -11,8 +11,8 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "stockora",
-      "database_id": "00000000-0000-0000-0000-000000000001"
+      "database_name": "stockora-db",
+      "database_id": "fdb67cf9-3d3c-4713-80fc-5e8d7e74b02f"
     }
   ],
   "dev": {
