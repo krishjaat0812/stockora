@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { effectivePermissions, fallbackRoute, type ActionPermissions, type Permissions } from '../../src/shared/features';
 import { recordAudit } from '../audit';
-import { dummyVerify, hashPassword, validatePassword, verifyPassword } from '../auth/password';
+import { dummyVerify, hashPassword, needsRehash, validatePassword, verifyPassword } from '../auth/password';
 import {
   attachSessionCookie,
   canChangeOwnPassword,
@@ -146,7 +146,37 @@ export function buildAuthRoutes() {
     }
 
     const valid = await verifyPassword(user.password_hash, password);
-    if (!valid) return fail('Invalid email or password.');
+    if (!valid) {
+      // If the hash is legacy and cannot be verified on this runtime,
+      // we still return invalid credentials rather than silently accepting.
+      // The user must reset their password to the current v1 format.
+      await recordAudit(c.env, {
+        action: 'login.failed_legacy_hash',
+        actorUserId: user?.id ?? null,
+        actorEmail: email,
+        outcome: 'failure',
+        metadata: { hash_legacy: true, ip },
+      });
+      return fail('Invalid email or password. Your password hash requires update — use the forgot-password flow to reset.');
+    }
+
+    // Upgrade legacy or older-format hashes to the current v1 format
+    // after successful verification, so future logins are faster and compatible.
+    if (needsRehash(user.password_hash)) {
+      try {
+        await c.env.DB.prepare('UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?')
+          .bind(await hashPassword(password), new Date().toISOString(), user.id)
+          .run();
+        await recordAudit(c.env, {
+          action: 'login.hash_upgraded',
+          actorUserId: user.id,
+          actorEmail: email,
+          metadata: { hash_upgraded: true },
+        });
+      } catch {
+        // If upgrade fails (e.g., deriveKey error), continue with existing hash.
+      }
+    }
 
     if (user.status === 'invited') {
       return respond(
