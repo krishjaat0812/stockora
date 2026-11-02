@@ -231,8 +231,8 @@ async function seedCatalogue(env: Env): Promise<void> {
 async function seedUsers(env: Env): Promise<void> {
   const now = new Date().toISOString();
   // Demo accounts (and their documented passwords) exist only for local
-  // development. Any other environment must supply its own credentials, so a
-  // public deployment can never expose a known administrator password.
+  // development. Any public deployment must supply its own credentials,
+  // so a production environment can never expose a known administrator password.
   const demoMode = env.DEV_LINKS === 'true';
 
   const adminEmail = (env.SEED_ADMIN_EMAIL ?? 'admin@stockora.dev').toLowerCase();
@@ -241,11 +241,9 @@ async function seedUsers(env: Env): Promise<void> {
     .bind(adminEmail)
     .first();
   if (!existingAdmin) {
-    if (!configuredAdminPassword && !demoMode) {
-      console.warn(
-        '[stockora] No administrator account exists. Set SEED_ADMIN_EMAIL and SEED_ADMIN_PASSWORD in the deployment environment and redeploy to bootstrap one.',
-      );
-    } else {
+    // Only create administrator when a password is explicitly configured.
+    // Never use a hardcoded default password in production.
+    if (configuredAdminPassword) {
       await env.DB.prepare(
         `INSERT INTO users (id, email, password_hash, display_name, role, status, capabilities, created_at, updated_at)
          VALUES (?, ?, ?, ?, 'super_admin', 'active', ?, ?, ?)`,
@@ -253,13 +251,39 @@ async function seedUsers(env: Env): Promise<void> {
         .bind(
           uuid(),
           adminEmail,
-          await hashPassword(configuredAdminPassword ?? 'StockoraAdmin!2026'),
+          await hashPassword(configuredAdminPassword),
           'Platform Administrator',
           JSON.stringify(['*']),
           now,
           now,
         )
         .run();
+    } else if (demoMode) {
+      // Demo credentials are only permitted in an explicitly enabled
+      // development environment (DEV_LINKS=true).
+      console.info('[stockora] Using default demo administrator credentials.');
+      await env.DB.prepare(
+        `INSERT INTO users (id, email, password_hash, display_name, role, status, capabilities, created_at, updated_at)
+         VALUES (?, ?, ?, ?, 'super_admin', 'active', ?, ?, ?)`,
+      )
+        .bind(
+          uuid(),
+          adminEmail,
+          await hashPassword('StockoraAdmin!2026'),
+          'Platform Administrator',
+          JSON.stringify(['*']),
+          now,
+          now,
+        )
+        .run();
+    } else {
+      // Production deployment without SEED_ADMIN_PASSWORD: skip admin
+      // creation and prompt the operator to configure credentials before redeploying.
+      console.warn(
+        `[stockora] No administrator account exists and SEED_ADMIN_PASSWORD is not set.
+Set SEED_ADMIN_PASSWORD in the deployment environment and redeploy to bootstrap one.
+Without an administrator, the system cannot authorize privileged operations.`,
+      );
     }
   }
 
